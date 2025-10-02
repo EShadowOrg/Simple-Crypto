@@ -1,1 +1,1 @@
-# Stock-Algorithm-Tester
+# Crypto-Algorithm-Tester

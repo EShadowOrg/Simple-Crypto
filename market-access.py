@@ -1,8 +1,8 @@
-import yfinance
 import pandas as pd
 
-class StockAccess:
+class MarketAccess:
     def __init__(self):
         self.stocks = {}
 
-    def subscribe(self, symbol, ):
+    def subscribe(self, symbol):
+        pass
