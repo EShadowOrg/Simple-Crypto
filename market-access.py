@@ -34,6 +34,12 @@ class MarketAccess:
             raise ValueError("Currency must be a string")
         if not isinstance(symbol, str):
             raise ValueError("Symbol must be a string")
+        symbols = self.request("/api/v3/exchangeInfo")['symbols']
+        if not any(s['symbol'] == f"{symbol.upper()}{currency.upper()}" for s in symbols):
+            raise ValueError(f"Symbol {symbol.upper()}{currency.upper()} not found")
+        if event not in ["ticker", "trade", "kline_1m", "kline_3m", "kline_5m", "kline_15m", "kline_30m", "kline_1h", "kline_2h", "kline_4h", "kline_6h", "kline_8h", "kline_12h", "kline_1d"]:
+            # TODO: list all valid events
+            pass
         # TODO: validate event
 
         currency = currency.upper()
