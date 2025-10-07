@@ -12,10 +12,13 @@ import requests
 import websocket as ws
 
 class BaseTracker:
-    def __init__(self, symbol):
+    def __init__(self, symbol, access: 'MarketAccess'):
         self.symbol = symbol
+        if not isinstance(access, MarketAccess):
+            raise ValueError("access must be an instance of MarketAccess")
+        self.access = access
 
-    def on_price_update(self, price: float):
+    def on_event(self, event, data):
         pass
 
 class MarketAccess:
@@ -53,6 +56,30 @@ class MarketAccess:
                     self.stocks[symbol]["tracker"].append(instance)
         else:
             self.actions.put({"type": "subscribe", "symbol": symbol, "currency": currency, "event": event})
+
+    @staticmethod
+    def static_request(endpoint, us=True):
+        if us:
+            base_url = "https://api.binance.us"
+        else:
+            base_url = "https://eapi.binance.com"
+        r = requests.get(f"{base_url}{endpoint}")
+        if r.status_code == 200:
+            return r.json()
+        else:
+            if r.status_code == 451 and r.json().contains("code") and r.json()['code'] == 0:
+                us = not us
+                if us:
+                    base_url = "https://api.binance.us"
+                else:
+                    base_url = "https://eapi.binance.com"
+                r = requests.get(f"{base_url}{endpoint}")
+                if r.status_code == 200:
+                    return r.json()
+                else:
+                    raise ConnectionError(f"Error {r.status_code}: {r.text}")
+            else:
+                raise ConnectionError(f"Error {r.status_code}: {r.text}")
 
     def request(self, endpoint):
         if self.us:
