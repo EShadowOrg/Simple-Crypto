@@ -113,9 +113,14 @@ class ThreadSafeStock:
         with self.lock:
             return len(self.trackers) > 0
 
-    def get_trackers(self):
+    def notify(self, event, data):
         with self.lock:
-            return self.trackers.copy()
+            for tracker in self.trackers:
+                try:
+                    tracker.on_event(event, data)
+                except Exception as e:
+                    print(f"Error notifying tracker: {e}")
+                    continue
 
     def __contains__(self, instance):
         with self.lock:
@@ -173,6 +178,12 @@ class ThreadSafeStockList:
         currency = currency.upper()
         symbol = symbol.upper()
         key = f"{symbol}{currency}@{event}"
+        with self.lock:
+            return self.stocks.get(key, None)
+
+    def getbykey(self, key: str):
+        if not isinstance(key, str):
+            raise ValueError("key must be a string")
         with self.lock:
             return self.stocks.get(key, None)
 
