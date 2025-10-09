@@ -245,9 +245,16 @@ class MarketAccess:
             await asyncio.wait(to_remove, timeout=10, return_when=asyncio.ALL_COMPLETED)
             for task in to_remove:
                 if not task.done():
-                    print(f"{Fore.RED}[ERROR]{Fore.RESET} Failed to stop listener task")
+                    print(f"{Fore.RED}[ERROR]{Fore.RESET} Listener task failed to gracefully stop, cancelling")
                     task.cancel()
             await asyncio.sleep(1)
+        for listener in listeners:
+            listener.stop()
+        await asyncio.wait(listener_tasks, timeout=10, return_when=asyncio.ALL_COMPLETED)
+        for task in listener_tasks:
+            if not task.done():
+                print(f"{Fore.RED}[ERROR]{Fore.RESET} Listener task failed to gracefully stop, cancelling")
+                task.cancel()
 
     def run(self):
         with self.connected_lock:
