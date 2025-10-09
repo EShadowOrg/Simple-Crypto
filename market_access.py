@@ -15,7 +15,7 @@ import json
 
 WS_EVENTS = [
     "aggTrade",
-    "trade"
+    "trade",
     "kline_1m",
     "kline_3m",
     "kline_5m",
@@ -51,26 +51,19 @@ class MarketAccess:
             self.access = access
 
         def on_event(self, event, msg):
-            pass
+            print(f"{Fore.CYAN}[EVENT]{Fore.RESET} {self.symbol} received event {event}: {msg}")
 
         def __repr__(self):
             return f"<{self.__class__.__name__} for {self.symbol}>"
 
     def __init__(self, msg_retention=300, order_retention=300, max_actions_per_limit=3, rate_limit_seconds=1, us=True):
         self.stocks = tst.ThreadSafeStockList()
-        self.socket = None
-        self.socket_lock = threading.Lock()
         self.connected = False
         self.connected_lock = threading.Lock()
-        self.actions = queue.Queue()
-        self.actions_completed = tst.ThreadSafeCounter()
-        self.id = tst.ThreadSafeCounter()
-        self.order_list = tst.ThreadSafeOrderList()
-        self.msgs = tst.ThreadSafeMsgList()
+        self.msgs = asyncio.Queue()
         self.us = us
         self.us_lock = threading.Lock()
         self.msg_retention = msg_retention
-        self.order_retention = order_retention
         self.max_actions_per_limit = max_actions_per_limit
         self.rate_limit_seconds = rate_limit_seconds
         self.thread = None
@@ -88,19 +81,11 @@ class MarketAccess:
         if event not in WS_EVENTS:
             raise ValueError(f"Event {event} not supported. Supported events: {', '.join(WS_EVENTS)}")
 
-        currency = currency.upper()
-        symbol = symbol.upper()
-        if not self.stocks.add(symbol, currency, event, instance):
-            if self.socket is not None:
-                subid = self.id.count()
-                current_event = self.order_list.add(subid)
-                self.actions.put({"type": "subscribe", "symbol": symbol, "currency": currency, "event": event, "id": subid})
-                if current_event.wait(timeout=self.order_retention - 60):
-                    return self.msgs.get(subid)
-                return -1
-            else:
-                return 1
-        return 0
+        currency = currency.lower()
+        symbol = symbol.lower()
+        if not self.stocks.add(f"{symbol}{currency}@{event}", instance):
+            return True
+        return False
 
     def unsubscribe(self, symbol, instance, currency="USD", event="ticker"):
         if not isinstance(instance, MarketAccess.BaseTracker):
@@ -109,19 +94,14 @@ class MarketAccess:
             raise ValueError("Currency must be a string")
         if not isinstance(symbol, str):
             raise ValueError("Symbol must be a string")
-        currency = currency.upper()
-        symbol = symbol.upper()
-        if not self.stocks.remove(symbol, currency, event, instance):
-            if self.socket is not None:
-                subid = self.id.count()
-                current_event = self.order_list.add(subid)
-                self.actions.put({"type": "unsubscribe", "symbol": symbol, "currency": currency, "event": event, "id": subid})
-                if current_event.wait(timeout=self.order_retention - 60):
-                    return self.msgs.get(subid)
-                return -1
-            else:
-                return 1
-        return 0
+        if not isinstance(event, str):
+            raise ValueError("Event must be a string")
+
+        currency = currency.lower()
+        symbol = symbol.lower()
+        if not self.stocks.remove(f"{symbol}{currency}@{event}", instance):
+            return True
+        return False
 
     @staticmethod
     def static_request(endpoint, us=True):
@@ -222,125 +202,65 @@ class MarketAccess:
                 months_available.append(month)
         return months_available
 
-    async def handle_actions(self, max_per_limit=3):
-        while self.connected:
-            while self.actions.empty() or self.actions_completed.get() > max_per_limit:
-                await asyncio.sleep(0.1)
-            if self.socket is None and self.connected:
-                while self.socket is None:
-                    await asyncio.sleep(0.1)
-            if self.socket is not None and self.connected:
-                action = self.actions.get()
-                if action["type"] == "subscribe":
-                        msg = {
-                            "method": "SUBSCRIBE",
-                            "params": [f"{action['symbol'].lower()}{action['currency'].lower()}@{action['event'].lower()}"],
-                            "id": action['id']
-                        }
-                        self.socket.send(json.dumps(msg))
-                        self.actions_completed.count()
-                elif action["type"] == "unsubscribe":
-                        msg = {
-                            "method": "UNSUBSCRIBE",
-                            "params": [f"{action['symbol'].lower()}{action['currency'].lower()}@{action['event'].lower()}"],
-                            "id": action['id']
-                        }
-                        self.socket.send(json.dumps(msg))
-                        self.actions_completed.count()
-
-    async def rate_limit(self, limit=1):
-        while self.connected:
-            await asyncio.sleep(limit)
-            self.actions_completed.zero()
-
-    async def timeout_cleanup(self):
-        while self.connected:
-            await asyncio.sleep(min(self.msg_retention, self.order_retention) / 5)
-            self.msgs.cleanup(self.msg_retention)
-            self.order_list.cleanup(self.order_retention)
-
-    def on_message(self, msg):
-        msg = json.loads(msg)
-        self.msgs.add(msg.get('id', None), msg)
-        if "result" in msg and msg['result'] is None and 'id' in msg:
-            order = self.order_list.get(msg['id'])
-            if order is not None:
-                order.recieved()
-            events = []
-        elif 'e' in msg and 's' in msg:
-            if msg['e'] == 'aggTrade':
-                events = ["aggTrade"]
-            elif msg['e'] == 'trade':
-                events = ["trade"]
-            elif msg['e'] == 'kline':
-                events = [f"kline_{msg['k']['i']}"]
-            elif msg['e'] == '1hTicker':
-                events = ["ticker_1h"]
-            elif msg['e'] == '4hTicker':
-                events = ["ticker_4h"]
-            elif msg['e'] == '24hTicker':
-                events = ["ticker"]
-            elif msg['e'] == '24hMiniTicker':
-                events = ["miniTicker"]
-            elif msg['e'] == 'depthUpdate':
-                events = ["depth", "depth@100ms"]
-            else:
-                events = []
-        elif 'u' in msg:
-            events = ["bookTicker"]
-        else:
-            events = []
-
-        for event in events:
-            stock = self.stocks.getbykey(f"{msg['s']}@{event}")
+    async def msg_processor(self, stream, msg):
+        while not self.msgs.empty() or self.connected:
+            msg = await self.msgs.get()
+            if msg['event'] == 'end':
+                return
+            stock = self.stocks.get(msg['stream'])
             if stock is not None:
-                stock.notify(event, msg)
+                stock.notify(msg['stream'], msg['data'])
 
-    async def connect(self):
+    # TODO: Completely rework _run() and listen(), add run().
+    """
+    run() calls asyncio.run(self._run()),
+    _run() is async and manages all the listeners.
+        Subscribe and unsubscribe talk to _run to add new listeners and remove old ones.
+    listener is now an object that takes a stream name and a market access object.
+        It has a start method that is async and connects to the stream and listens for messages with a `while not self.stopped: msg = await ws.recv()`.
+        It has a stop method that sets a flag to stop the listener.
+    Edit on_message() to take a `stream` argument to know which stream the message came from.
+        on_message() then searches self.stocks for the right stream and calls notify on it.
+    """
+
+    async def _run(self):
+        listeners = []
+        listener_tasks = []
+        while self.connected:
+            stock_events = self.stocks.keys()
+            listened_events = [l.event for l in listeners]
+            new_events = [event for event in stock_events if event not in listened_events]
+            old_events = [event for event in listened_events if event not in stock_events]
+            for event in new_events:
+                listener = MarketAccess.Listener(event, self)
+                listeners.append(listener)
+                listener_tasks.append(asyncio.create_task(listener.start()))
+            to_remove = []
+            for i, listener in enumerate(listeners):
+                if listener.event in old_events:
+                    listener.stop()
+                    to_remove.append(listener_tasks[i])
+                    listeners.remove(listener)
+                    listener_tasks.remove(listener_tasks[i])
+            await asyncio.wait(to_remove, timeout=10, return_when=asyncio.ALL_COMPLETED)
+            for task in to_remove:
+                if not task.done():
+                    print(f"{Fore.RED}[ERROR]{Fore.RESET} Failed to stop listener task")
+                    task.cancel()
+            await asyncio.sleep(1)
+
+    def run(self):
         with self.connected_lock:
             self.connected = True
-        while self.connected:
-            try:
-                if self.us:
-                    base_url = "https://api.binance.us"
-                else:
-                    base_url = "https://eapi.binance.com"
-                r = requests.get(f"{base_url}/api/v3/ping", timeout=5)
-                if r.status_code == 451 and r.json().contains("code") and r.json()['code'] == 0:
-                    with self.us_lock:
-                        self.us = not self.us
-                    if self.us:
-                        base_url = "https://api.binance.us"
-                    else:
-                        base_url = "https://eapi.binance.com"
-                    r2 = requests.get(f"{base_url}/api/v3/ping", timeout=5)
-                    if r2.status_code != 200:
-                        raise ConnectionError(f"Error: Unable to connect to Binance Server: {r.status_code}: {r.text}")
-                ws_url = "wss://stream.binance.us:9443/ws" if self.us else "wss://stream.binance.com:9443/ws"
-                async with ws.connect(ws_url) as connection:
-                    with self.socket_lock:
-                        self.socket = connection
-                    print(f"{Fore.GREEN}[CONNECTED]{Fore.RESET} Connected to {'Binance US' if self.us else 'Binance Global'} WebSocket")
-                    # TODO: Start tasks (handle_actions, rate_limit, timeout_cleanup) and start msg listener
-            except ws.ConnectionClosed:
-                with self.socket_lock:
-                    self.socket = None
-                print(f"{Fore.RED}[DISCONNECTED]{Fore.RESET} WebSocket connection closed. Reconnecting in 5 seconds...")
-                await asyncio.sleep(5)
-            except Exception as e:
-                with self.socket_lock:
-                    self.socket = None
-                print(f"{Fore.RED}[ERROR]{Fore.RESET} Exception in connect: {e}")
-                await asyncio.sleep(5)
-
-    def _run(self):
-        asyncio.run(self.connect())
+        asyncio.run(self._run())
 
     def start(self):
-        if self.socket is not None:
-            raise RuntimeError("Socket already started")
+        with self.connected_lock:
+            if self.connected:
+                print(f"{Fore.RED}[ERROR]{Fore.RESET} MarketAccess is already running, cannot start another instance")
+                return
 
-        market_thread = threading.Thread(target=self._run, daemon=True)
+        market_thread = threading.Thread(target=self.run, daemon=True)
         market_thread.start()
         self.thread = market_thread
 
@@ -354,4 +274,12 @@ class MarketAccess:
             print(f"{Fore.GREEN}[STOPPED]{Fore.RESET} Thread stopped gracefully")
 
 if __name__ == "__main__":
-    print([mo.strftime("%Y-%m") for mo in MarketAccess.get_history("BTC", "USD", "1m", 2)])
+    market = MarketAccess()
+    market.start()
+    time.sleep(2)
+    tracker = MarketAccess.BaseTracker("BTC", market)
+    market.subscribe("BTC", tracker, event="trade")
+    time.sleep(60)
+    market.unsubscribe("BTC", tracker, event="trade")
+    time.sleep(5)
+    market.stop()
