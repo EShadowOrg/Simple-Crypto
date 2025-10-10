@@ -51,22 +51,71 @@ class MarketAccess:
             self.access = access
 
         def on_event(self, event, msg):
-            print(f"{Fore.CYAN}[EVENT]{Fore.RESET} {self.symbol} received event {event}: {msg}")
+            print(f"{Fore.CYAN}[EVENT]{Fore.RESET} Received event {event}: {msg}")
 
         def __repr__(self):
             return f"<{self.__class__.__name__} for {self.symbol}>"
 
-    def __init__(self, msg_retention=300, order_retention=300, max_actions_per_limit=3, rate_limit_seconds=1, us=True):
+    class BaseListener:
+        def __init__(self, event: str, market_access: 'MarketAccess'):
+            if not isinstance(event, str):
+                raise ValueError("event must be a string")
+            if not isinstance(market_access, MarketAccess):
+                raise ValueError("market_access must be an instance of MarketAccess")
+            self.event = event
+            self.market_access = market_access
+            self.connection = None
+            self.stopped = asyncio.Event()
+
+        async def start(self):
+            if self.market_access.us:
+                url = "wss://stream.binance.us:9443/ws/{self.event}"
+            else:
+                url = "wss://stream.binance.com:9443/ws/{self.event}"
+            while not self.stopped.is_set():
+                try:
+                    async with ws.connect(url) as connection:
+                        self.connection = connection
+                        stop_task = asyncio.create_task(self.stopped.wait())
+                        while not self.stopped.is_set():
+                            msg_task = asyncio.create_task(connection.recv())
+                            done, pending = await asyncio.wait(
+                                [msg_task, stop_task],
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            if self.stopped.is_set():
+                                msg_task.cancel()
+                                print(f"{Fore.YELLOW}[LISTENER-WARNING]{Fore.RESET} Closing listener for {self.event}...")
+                                await self.connection.close()
+                                print(f"{Fore.GREEN}[LISTENER-CONNECTION-CLOSED]{Fore.RESET} Connection for {self.event} closed")
+                                break
+                            for task in done:
+                                if task == msg_task:
+                                    message = task.result()
+                                    await self.market_access.msgs.put({'stream': self.event, 'data': json.loads(message)})
+                except ws.exceptions.ConnectionClosed as e:
+                    print(f"{Fore.YELLOW}[LISTENER-WARNING]{Fore.RESET} Listener for {self.event} disconnected: {e}. Reconnecting in 5 seconds...")
+                    await asyncio.sleep(5)
+                except Exception as e:
+                    print(f"{Fore.RED}[LISTENER-ERROR]{Fore.RESET} Listener for {self.event} encountered an error: {e}. Reconnecting in 5 seconds...")
+                    await asyncio.sleep(5)
+            print(f"{Fore.GREEN}[LISTENER-STOPPED]{Fore.RESET} Listener for {self.event} stopped")
+
+        def stop(self):
+            self.stopped.set()
+
+    def __init__(self, us=True, listener_class=None):
         self.stocks = tst.ThreadSafeStockList()
         self.connected = False
         self.connected_lock = threading.Lock()
         self.msgs = asyncio.Queue()
         self.us = us
         self.us_lock = threading.Lock()
-        self.msg_retention = msg_retention
-        self.max_actions_per_limit = max_actions_per_limit
-        self.rate_limit_seconds = rate_limit_seconds
         self.thread = None
+        if listener_class is not None:
+            self.listener_class = listener_class
+        else:
+            self.listener_class = MarketAccess.BaseListener
 
     def subscribe(self, symbol, instance, currency="USD", event="ticker"):
         if not isinstance(instance, MarketAccess.BaseTracker):
@@ -202,10 +251,10 @@ class MarketAccess:
                 months_available.append(month)
         return months_available
 
-    async def msg_processor(self, stream, msg):
+    async def msg_processor(self):
         while not self.msgs.empty() or self.connected:
             msg = await self.msgs.get()
-            if msg['event'] == 'end':
+            if msg['stream'] == 'end':
                 return
             stock = self.stocks.get(msg['stream'])
             if stock is not None:
@@ -226,35 +275,52 @@ class MarketAccess:
     async def _run(self):
         listeners = []
         listener_tasks = []
+        print(f"{Fore.GREEN}[MARKET-STARTED]{Fore.RESET} MarketAccess started")
+        self.request("/api/v3/ping")
+        print(f"{Fore.GREEN}[MARKET-CONNECTION-TEST]{Fore.RESET} Connection test successful")
+        processor_task = asyncio.create_task(self.msg_processor())
+        print(f"{Fore.GREEN}[MARKET-PROCESSOR-STARTED]{Fore.RESET} Message processor started")
         while self.connected:
             stock_events = self.stocks.keys()
             listened_events = [l.event for l in listeners]
             new_events = [event for event in stock_events if event not in listened_events]
             old_events = [event for event in listened_events if event not in stock_events]
             for event in new_events:
-                listener = MarketAccess.Listener(event, self)
+                print(f"{Fore.GREEN}[MARKET-LISTENER-START]{Fore.RESET} Starting listener for {event}...")
+                listener = self.listener_class(event, self)
                 listeners.append(listener)
                 listener_tasks.append(asyncio.create_task(listener.start()))
             to_remove = []
+            stopped_listeners = []
             for i, listener in enumerate(listeners):
                 if listener.event in old_events:
+                    print(f"{Fore.YELLOW}[MARKET-LISTENER-STOP]{Fore.RESET} Stopping listener for {listener.event}...")
                     listener.stop()
                     to_remove.append(listener_tasks[i])
+                    stopped_listeners.append(listener)
                     listeners.remove(listener)
                     listener_tasks.remove(listener_tasks[i])
-            await asyncio.wait(to_remove, timeout=10, return_when=asyncio.ALL_COMPLETED)
-            for task in to_remove:
-                if not task.done():
-                    print(f"{Fore.RED}[ERROR]{Fore.RESET} Listener task failed to gracefully stop, cancelling")
-                    task.cancel()
-            await asyncio.sleep(1)
+            if to_remove:
+                await asyncio.wait(to_remove, timeout=20, return_when=asyncio.ALL_COMPLETED)
+                for i, task in enumerate(to_remove):
+                    if not task.done():
+                        print(f"{Fore.RED}[MARKET-LISTENER-ERROR]{Fore.RESET} Listener for {stopped_listeners[i].event} task failed to stop gracefully, cancelling...")
+                        task.cancel()
+                    else:
+                        print(f"{Fore.GREEN}[MARKET-LISTENER-STOPPED]{Fore.RESET} Listener for {stopped_listeners[i].event} stopped")
+            await asyncio.sleep(0.1)
         for listener in listeners:
             listener.stop()
-        await asyncio.wait(listener_tasks, timeout=10, return_when=asyncio.ALL_COMPLETED)
+        await asyncio.wait(listener_tasks, timeout=20, return_when=asyncio.ALL_COMPLETED)
         for task in listener_tasks:
             if not task.done():
-                print(f"{Fore.RED}[ERROR]{Fore.RESET} Listener task failed to gracefully stop, cancelling")
+                print(f"{Fore.RED}[MARKET-LISTENER-ERROR]{Fore.RESET} Listener task failed to gracefully stop, cancelling")
                 task.cancel()
+        await self.msgs.put({'stream': 'end', 'data': None})
+        await asyncio.wait([processor_task], timeout=30, return_when=asyncio.ALL_COMPLETED)
+        if not processor_task.done():
+            print(f"{Fore.RED}[MARKET-PROCESSOR-ERROR]{Fore.RESET} Message processor failed to stop gracefully, cancelling")
+            processor_task.cancel()
 
     def run(self):
         with self.connected_lock:
@@ -264,7 +330,7 @@ class MarketAccess:
     def start(self):
         with self.connected_lock:
             if self.connected:
-                print(f"{Fore.RED}[ERROR]{Fore.RESET} MarketAccess is already running, cannot start another instance")
+                print(f"{Fore.RED}[MARKET-START-ERROR]{Fore.RESET} MarketAccess is already running, cannot start another instance")
                 return
 
         market_thread = threading.Thread(target=self.run, daemon=True)
@@ -276,9 +342,9 @@ class MarketAccess:
             self.connected = False
         self.thread.join(timeout=20)
         if self.thread.is_alive():
-            print(f"{Fore.RED}[ERROR]{Fore.RESET} Failed to stop thread")
+            print(f"{Fore.RED}[MARKET-STOP-ERROR]{Fore.RESET} Failed to stop thread")
         else:
-            print(f"{Fore.GREEN}[STOPPED]{Fore.RESET} Thread stopped gracefully")
+            print(f"{Fore.GREEN}[MARKET-STOPPED]{Fore.RESET} Thread stopped gracefully")
 
 if __name__ == "__main__":
     market = MarketAccess()
