@@ -1,4 +1,3 @@
-import queue
 import threading
 import time
 from typing import Literal
@@ -12,6 +11,7 @@ from colorama import Fore
 import thread_safe_types as tst
 import asyncio
 import json
+import traceback
 
 WS_EVENTS = [
     "aggTrade",
@@ -69,12 +69,13 @@ class MarketAccess:
 
         async def start(self):
             if self.market_access.us:
-                url = "wss://stream.binance.us:9443/ws/{self.event}"
+                url = f"wss://stream.binance.us:9443/ws/{self.event}"
             else:
-                url = "wss://stream.binance.com:9443/ws/{self.event}"
+                url = f"wss://stream.binance.com:9443/ws/{self.event}"
             while not self.stopped.is_set():
                 try:
                     async with ws.connect(url) as connection:
+                        print(f"{Fore.GREEN}[LISTENER-START]{Fore.RESET} Listener task for {self.event} started")
                         self.connection = connection
                         stop_task = asyncio.create_task(self.stopped.wait())
                         while not self.stopped.is_set():
@@ -94,10 +95,10 @@ class MarketAccess:
                                     message = task.result()
                                     await self.market_access.msgs.put({'stream': self.event, 'data': json.loads(message)})
                 except ws.exceptions.ConnectionClosed as e:
-                    print(f"{Fore.YELLOW}[LISTENER-WARNING]{Fore.RESET} Listener for {self.event} disconnected: {e}. Reconnecting in 5 seconds...")
+                    print(f"{Fore.YELLOW}[LISTENER-WARNING]{Fore.RESET} Listener for {self.event} disconnected (line # {traceback.extract_tb(e.__traceback__)[-1].lineno}): {e}. Reconnecting in 5 seconds...")
                     await asyncio.sleep(5)
                 except Exception as e:
-                    print(f"{Fore.RED}[LISTENER-ERROR]{Fore.RESET} Listener for {self.event} encountered an error: {e}. Reconnecting in 5 seconds...")
+                    print(f"{Fore.RED}[LISTENER-ERROR]{Fore.RESET} Listener for {self.event} encountered an error (line # {traceback.extract_tb(e.__traceback__)[-1].lineno}): {e}. Reconnecting in 5 seconds...")
                     await asyncio.sleep(5)
             print(f"{Fore.GREEN}[LISTENER-STOPPED]{Fore.RESET} Listener for {self.event} stopped")
 
@@ -286,7 +287,7 @@ class MarketAccess:
             new_events = [event for event in stock_events if event not in listened_events]
             old_events = [event for event in listened_events if event not in stock_events]
             for event in new_events:
-                print(f"{Fore.GREEN}[MARKET-LISTENER-START]{Fore.RESET} Starting listener for {event}...")
+                print(f"{Fore.YELLOW}[MARKET-LISTENER-START]{Fore.RESET} Starting listener for {event}...")
                 listener = self.listener_class(event, self)
                 listeners.append(listener)
                 listener_tasks.append(asyncio.create_task(listener.start()))
@@ -306,18 +307,18 @@ class MarketAccess:
                     if not task.done():
                         print(f"{Fore.RED}[MARKET-LISTENER-ERROR]{Fore.RESET} Listener for {stopped_listeners[i].event} task failed to stop gracefully, cancelling...")
                         task.cancel()
-                    else:
-                        print(f"{Fore.GREEN}[MARKET-LISTENER-STOPPED]{Fore.RESET} Listener for {stopped_listeners[i].event} stopped")
             await asyncio.sleep(0.1)
         for listener in listeners:
             listener.stop()
-        await asyncio.wait(listener_tasks, timeout=20, return_when=asyncio.ALL_COMPLETED)
+        if not all([task.done() for task in listener_tasks]):
+            await asyncio.wait(listener_tasks, timeout=20, return_when=asyncio.ALL_COMPLETED)
         for task in listener_tasks:
             if not task.done():
                 print(f"{Fore.RED}[MARKET-LISTENER-ERROR]{Fore.RESET} Listener task failed to gracefully stop, cancelling")
                 task.cancel()
         await self.msgs.put({'stream': 'end', 'data': None})
-        await asyncio.wait([processor_task], timeout=30, return_when=asyncio.ALL_COMPLETED)
+        if not processor_task.done():
+            await asyncio.wait([processor_task], timeout=30, return_when=asyncio.ALL_COMPLETED)
         if not processor_task.done():
             print(f"{Fore.RED}[MARKET-PROCESSOR-ERROR]{Fore.RESET} Message processor failed to stop gracefully, cancelling")
             processor_task.cancel()
@@ -352,7 +353,7 @@ if __name__ == "__main__":
     time.sleep(2)
     tracker = MarketAccess.BaseTracker("BTC", market)
     market.subscribe("BTC", tracker, event="trade")
-    time.sleep(60)
+    time.sleep(30)
     market.unsubscribe("BTC", tracker, event="trade")
     time.sleep(5)
     market.stop()
