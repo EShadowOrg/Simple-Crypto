@@ -1,7 +1,7 @@
-import market_access as ma
-from market_access import MarketAccess
+from src.simple_crypto.market_access import MarketAccess
 import time
-import misc
+from src.simple_crypto import misc
+
 
 def test_market_access():
     log_file = misc.get_log_file()

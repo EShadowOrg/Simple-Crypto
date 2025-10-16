@@ -1,14 +1,13 @@
 import threading
-import time
 from typing import Literal
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import zipfile
 import requests
 import websockets as ws
 from colorama import Fore
-import thread_safe_types as tst
+from src.simple_crypto import thread_safe_types as tst
 import asyncio
 import json
 import traceback
@@ -256,32 +255,34 @@ class MarketAccess:
         months_available = []
         for i in range(num_months, 0, -1):
             month = (today - relativedelta(months=i))
-            if not os.path.isfile(f"Data\\{symbol}\\{symbol}{currency}-{interval}-{month.strftime('%Y-%m')}.csv"):
+            if not os.path.isfile(f"Data\\{symbol}\\{symbol}-{currency}-{interval}-{month.strftime('%Y-%m')}.csv"):
                 url = f"https://data.binance.vision/data/spot/monthly/klines/{symbol}{currency}/{interval}/{symbol}{currency}-{interval}-{month.strftime('%Y-%m')}.zip"
                 r = requests.get(url)
                 if r.status_code == 200:
-                    with open(f"Data\\{symbol}\\{symbol}{currency}-{interval}-{month.strftime('%Y-%m')}.zip",
+                    with open(f"Data\\{symbol}\\{symbol}-{currency}-{interval}-{month.strftime('%Y-%m')}.zip",
                               "wb") as f:
                         f.write(r.content)
-                    with zipfile.ZipFile(f"Data\\{symbol}\\{symbol}{currency}-{interval}-{month.strftime('%Y-%m')}.zip",
+                    with zipfile.ZipFile(f"Data\\{symbol}\\{symbol}-{currency}-{interval}-{month.strftime('%Y-%m')}.zip",
                                          'r') as zip_ref:
                         zip_ref.extractall(f"Data\\{symbol}")
-                    os.remove(f"Data\\{symbol}\\{symbol}{currency}-{interval}-{month.strftime('%Y-%m')}.zip")
+                    os.remove(f"Data\\{symbol}\\{symbol}-{currency}-{interval}-{month.strftime('%Y-%m')}.zip")
                 else:
                     url = url = f"https://data.binance.us/public_data/spot/monthly/klines/{symbol}{currency}/{interval}/{symbol}{currency}-{interval}-{month.strftime('%Y-%m')}.zip"
                     r = requests.get(url)
                     if r.status_code == 200:
-                        with open(f"Data\\{symbol}\\{symbol}{currency}-{interval}-{month.strftime('%Y-%m')}.zip",
+                        with open(f"Data\\{symbol}\\{symbol}-{currency}-{interval}-{month.strftime('%Y-%m')}.zip",
                                   "wb") as f:
                             f.write(r.content)
                         with zipfile.ZipFile(
-                                f"Data\\{symbol}\\{symbol}{currency}-{interval}-{month.strftime('%Y-%m')}.zip",
+                                f"Data\\{symbol}\\{symbol}-{currency}-{interval}-{month.strftime('%Y-%m')}.zip",
                                 'r') as zip_ref:
+                            file = zip_ref.namelist()[0]
                             zip_ref.extractall(f"Data\\{symbol}")
-                        os.remove(f"Data\\{symbol}\\{symbol}{currency}-{interval}-{month.strftime('%Y-%m')}.zip")
+                            os.rename(f"Data\\{symbol}\\{file}", f"Data\\{symbol}\\{symbol}-{currency}-{interval}-{month.strftime('%Y-%m')}.csv")
+                        os.remove(f"Data\\{symbol}\\{symbol}-{currency}-{interval}-{month.strftime('%Y-%m')}.zip")
                     else:
                         pass
-            if os.path.isfile(f"Data\\{symbol}\\{symbol}{currency}-{interval}-{month.strftime('%Y-%m')}.csv"):
+            if os.path.isfile(f"Data\\{symbol}\\{symbol}-{currency}-{interval}-{month.strftime('%Y-%m')}.csv"):
                 months_available.append(month)
         return months_available
 

@@ -1,0 +1,11 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "simple_crypto"
+version = "0.1.0"
+description = "A simple library for accessing real-time and historical cryptocurrency data"
+readme = "README.md"
+license = {text = "Apache-2.0", file = "LICENSE", url = "https://www.apache.org/licenses/LICENSE-2.0.txt"}
+authors = {name = "", email = "
