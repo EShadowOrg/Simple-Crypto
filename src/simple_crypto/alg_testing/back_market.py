@@ -105,3 +105,5 @@ class BackMarket:
             self.logger = MarketAccess.BaseLogger()
         else:
             self.logger = logger
+
+    # TODO: Implement subscribe and unsubscribe methods and start, run, _run, and stop, to be consistent with MarketAccess
