@@ -1,4 +1,4 @@
-from src.simple_crypto.market_access import MarketAccess
+from src.simple_crypto import MarketAccess
 import time
 from src.simple_crypto import misc
 

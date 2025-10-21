@@ -286,6 +286,25 @@ class MarketAccess:
                 months_available.append(month)
         return months_available
 
+    @staticmethod
+    def get_available_data(data_dir="Data"):
+        if os.path.isdir(data_dir):
+            coins = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
+            data = {}
+            for coin in coins:
+                csvs = [f for f in os.listdir(os.path.join(data_dir, coin)) if os.path.isfile(os.path.join(data_dir, coin, f)) and f.endswith('.csv')]
+                data[coin] = {}
+                for csv in csvs:
+                    breakdown = csv.removesuffix(".csv").split("-")
+                    if breakdown[1] not in data[coin]:
+                        data[coin][breakdown[1]] = {}
+                    if breakdown[2] not in data[coin][breakdown[1]]:
+                        data[coin][breakdown[1]][breakdown[2]] = {}
+                    data[coin][breakdown[1]][breakdown[2]][f"{breakdown[3]}-{breakdown[4]}"] = os.path.join(data_dir, coin, csv)
+            return data
+        else:
+            return {}
+
     async def msg_processor(self):
         self.logger.log(content=f"Message processor started", title="[MARKET-PROCESSOR-STARTED]", title_color=Fore.GREEN)
         while not self.msgs.empty() or self.connected:

@@ -8,4 +8,31 @@ version = "0.1.0"
 description = "A simple library for accessing real-time and historical cryptocurrency data"
 readme = "README.md"
 license = {text = "Apache-2.0", file = "LICENSE", url = "https://www.apache.org/licenses/LICENSE-2.0.txt"}
-authors = {name = "", email = "
+authors = {name = "EShadow55", url="https://github.com/EShadow55"}
+repository = "https://github.com/EShadowOrg/Simple-Crypto"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: Apache Software License",
+]
+keywords = [
+    "crypto",
+    "cryptocurrency",
+    "trading",
+    "Binance",
+    "algorithmic trading",
+    "automated trading",
+    "backtesting",
+    "market analysis",
+    "fintech"
+]
+
+dependencies = [
+    "requests",
+    "websockets",
+    "python-dateutil",
+    "colorama",
+    "numpy",
+    "pandas"
+]
