@@ -34,5 +34,6 @@ dependencies = [
     "python-dateutil",
     "colorama",
     "numpy",
-    "pandas"
+    "pandas",
+    "aiofiles"
 ]

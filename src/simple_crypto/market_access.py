@@ -63,7 +63,6 @@ class MarketAccess:
                 raise ValueError("market_access must be an instance of MarketAccess")
             self.event = event
             self.market_access = market_access
-            self.connection = None
             self.stopped = asyncio.Event()
 
         async def start(self):
@@ -75,7 +74,7 @@ class MarketAccess:
                 try:
                     async with ws.connect(url) as connection:
                         self.market_access.logger.log(content=f"Listener task for {self.event} started", title="[LISTENER-START]", title_color=Fore.GREEN)
-                        self.connection = connection
+                        connection = connection
                         stop_task = asyncio.create_task(self.stopped.wait())
                         while not self.stopped.is_set():
                             msg_task = asyncio.create_task(connection.recv())
@@ -86,7 +85,7 @@ class MarketAccess:
                             if self.stopped.is_set():
                                 msg_task.cancel()
                                 self.market_access.logger.log(content=f"Closing listener for {self.event}...", title="[LISTENER-WARNING]", title_color=Fore.YELLOW)
-                                await self.connection.close()
+                                await connection.close()
                                 self.market_access.logger.log(content=f"Connection for {self.event} closed", title="[LISTENER-CONNECTION-CLOSED]", title_color=Fore.GREEN)
                                 break
                             for task in done:
@@ -133,7 +132,7 @@ class MarketAccess:
                     with open(file, 'a') as f:
                         f.write(f"{timestamp_insert if self.timestamps else ''}{(title + ' ') if title is not None else ''}{content}\n")
 
-    def __init__(self, us=True, listener_class=None, logger=None):
+    def __init__(self, us=True, listener_class=BaseListener, logger=None):
         self.stocks = tst.ThreadSafeStockList()
         self.connected = False
         self.connected_lock = threading.Lock()
@@ -141,14 +140,11 @@ class MarketAccess:
         self.us = us
         self.us_lock = threading.Lock()
         self.thread = None
-        if listener_class is not None:
-            self.listener_class = listener_class
+        self.listener_class = listener_class
+        if logger is None:
+            self.logger = MarketAccess.BaseLogger()
         else:
-            self.listener_class = MarketAccess.BaseListener
-        if logger is not None:
             self.logger = logger
-        else:
-            self.logger = self.BaseLogger()
 
     def subscribe(self, symbol, instance, currency="USD", event="ticker"):
         if not isinstance(instance, MarketAccess.BaseTracker):
